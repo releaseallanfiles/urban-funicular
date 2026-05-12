@@ -1,0 +1,16 @@
+{
+  "name": "discord-channel-logger",
+  "version": "1.0.0",
+  "description": "Logs Discord channel messages (with timestamps & usernames) to per-channel RTF files, and saves image attachments.",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.12",
+    "discord.js": "^14.16.3"
+  }
+}
