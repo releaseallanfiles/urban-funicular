@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Events, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
@@ -10,10 +10,11 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.DirectMessages,
   ],
 });
 
-// ── Paths ────────────────────────────────────────────────────────────────────
+// ── Paths ──────────────────────────────────────────────────────────────
 const BASE_DIR = process.env.LOG_DIR || path.join(__dirname, 'logs');
 const ZIPS_DIR = path.join(BASE_DIR, 'image_archives');
 
@@ -23,7 +24,7 @@ function ensureDirs() {
   });
 }
 
-// ── RTF helpers ──────────────────────────────────────────────────────────────
+// ── RTF helpers ────────────────────────────────────────────────────────────
 function sanitizeRtf(text) {
   return text
     .replace(/\\/g, '\\\\')
@@ -46,7 +47,7 @@ function rtfFooter() {
   return '}';
 }
 
-// ── File paths ───────────────────────────────────────────────────────────────
+// ── File paths ─────────────────────────────────────────────────────────────
 function rtfPathForChannel(channel) {
   const guild  = channel.guild ? channel.guild.name.replace(/[^a-z0-9]/gi, '_') : 'DM';
   const chName = channel.name  ? channel.name.replace(/[^a-z0-9]/gi, '_')  : channel.id;
@@ -118,7 +119,7 @@ function fetchImageBuffer(url) {
   });
 }
 
-// ── Zip helper ───────────────────────────────────────────────────────────────
+// ── Zip helper ─────────────────────────────────────────────────────────────
 function appendToZip(zipPath, buffer, fileName) {
   const zip = fs.existsSync(zipPath) ? new AdmZip(zipPath) : new AdmZip();
   zip.addFile(fileName, buffer);
@@ -165,7 +166,96 @@ async function handleMessage(message) {
   console.log(`[log] ${guildName}/#${chanName} — ${message.author.username}: ${(message.content || '').slice(0, 60)}`);
 }
 
-// ── Events ────────────────────────────────────────────────────────────────────
+// ── Slash Commands ─────────────────────────────────────────────────────────
+const commands = [
+  new SlashCommandBuilder()
+    .setName('status')
+    .setDescription('Check the logging status of this bot (ephemeral - visible only to you)')
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('logs')
+    .setDescription('Get information about stored logs (ephemeral - visible only to you)')
+    .toJSON(),
+  new SlashCommandBuilder()
+    .setName('help')
+    .setDescription('Show help information (ephemeral - visible only to you)')
+    .toJSON(),
+];
+
+// ── Register Slash Commands ────────────────────────────────────────────────
+async function registerCommands() {
+  const token = process.env.DISCORD_TOKEN;
+  const clientId = process.env.CLIENT_ID;
+
+  if (!clientId) {
+    console.error('❌  CLIENT_ID environment variable is not set.');
+    return;
+  }
+
+  const rest = new REST({ version: '10' }).setToken(token);
+
+  try {
+    console.log('🔄 Registering slash commands...');
+    await rest.put(Routes.applicationCommands(clientId), { body: commands });
+    console.log('✅  Slash commands registered successfully.');
+  } catch (err) {
+    console.error('❌  Failed to register slash commands:', err);
+  }
+}
+
+// ── Handle Slash Commands ──────────────────────────────────────────────────
+async function handleSlashCommand(interaction) {
+  const { commandName } = interaction;
+
+  try {
+    if (commandName === 'status') {
+      await interaction.reply({
+        content: `✅ Bot is running and logging messages. Logs directory: \`${BASE_DIR}\``,
+        ephemeral: true,
+      });
+    } else if (commandName === 'logs') {
+      const stats = {
+        logsDir: fs.existsSync(BASE_DIR),
+        zipsDir: fs.existsSync(ZIPS_DIR),
+        logCount: fs.existsSync(BASE_DIR) ? fs.readdirSync(BASE_DIR).filter(f => f.endsWith('.rtf')).length : 0,
+        zipCount: fs.existsSync(ZIPS_DIR) ? fs.readdirSync(ZIPS_DIR).filter(f => f.endsWith('.zip')).length : 0,
+      };
+      await interaction.reply({
+        content: `📊 **Logging Statistics**\n` +
+                 `RTF Files: ${stats.logCount}\n` +
+                 `ZIP Archives: ${stats.zipCount}`,
+        ephemeral: true,
+      });
+    } else if (commandName === 'help') {
+      await interaction.reply({
+        content: `📖 **Bot Commands Help**\n` +
+                 `/status - Check if the bot is running\n` +
+                 `/logs - View statistics about stored logs\n` +
+                 `/help - Show this help message\n\n` +
+                 `**What this bot does:**\n` +
+                 `• Logs all messages to RTF files\n` +
+                 `• Archives images to ZIP files\n` +
+                 `• All responses are private (ephemeral)`,
+        ephemeral: true,
+      });
+    } else {
+      await interaction.reply({
+        content: '❌ Unknown command.',
+        ephemeral: true,
+      });
+    }
+  } catch (err) {
+    console.error('[error] handleSlashCommand:', err);
+    if (!interaction.replied) {
+      await interaction.reply({
+        content: '❌ An error occurred while processing your command.',
+        ephemeral: true,
+      });
+    }
+  }
+}
+
+// ── Events ─────────────────────────────────────────────────────────────
 client.once(Events.ClientReady, () => {
   ensureDirs();
   console.log(`✅  Logged in as ${client.user.tag}`);
@@ -181,11 +271,28 @@ client.on(Events.MessageCreate, async message => {
   }
 });
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+client.on(Events.InteractionCreate, async interaction => {
+  if (interaction.isCommand()) {
+    await handleSlashCommand(interaction);
+  }
+});
+
+// ── Start ─────────────────────────────────────────────────────────────
 const token = process.env.DISCORD_TOKEN;
 if (!token) {
   console.error('❌  DISCORD_TOKEN environment variable is not set.');
   process.exit(1);
 }
 
+const clientId = process.env.CLIENT_ID;
+if (!clientId) {
+  console.error('❌  CLIENT_ID environment variable is not set.');
+  process.exit(1);
+}
+
 client.login(token);
+
+// Register commands when the bot is ready
+client.once(Events.ClientReady, async () => {
+  await registerCommands();
+});
